@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.http import HttpResponse
 from rest_framework import permissions, status, viewsets
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -7,6 +8,10 @@ from rest_framework.response import Response
 
 from .models import KYCSubmission, Merchant, STATUS_MORE_INFO_REQUESTED, STATUS_SUBMITTED
 from .serializers import KYCSubmissionSerializer
+
+
+def home(request):
+    return HttpResponse("Playto KYC API is running")
 
 
 class KYCSubmissionViewSet(viewsets.ModelViewSet):
