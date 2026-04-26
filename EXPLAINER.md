@@ -68,7 +68,7 @@ SLA is implemented dynamically using time comparison.
 A submission is marked `is_at_risk = true` if:
 
 * Status is `submitted` or `under_review`
-* It has been in queue for more than 24 hours
+* It was created more than 24 hours ago
 
 This is NOT stored in database to avoid stale data.
 
@@ -85,6 +85,7 @@ Access control:
 
 * Reviewer → can see all submissions
 * Merchant → can only see their own submissions
+* GET requests are temporarily public for demo purposes
 
 This is enforced in `get_queryset()` in the ViewSet.
 
@@ -105,7 +106,17 @@ This allows tracking of important system actions.
 
 ---
 
-## 7. AI Audit
+## 7. Error Format
+
+API errors are normalized into a simple format:
+
+* `{ "error": "message" }`
+
+This keeps validation and business-rule failures easy to consume from the frontend.
+
+---
+
+## 8. AI Audit
 
 While using AI tools, I encountered cases where:
 

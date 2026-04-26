@@ -41,3 +41,12 @@ class KYCSubmissionSerializer(serializers.ModelSerializer):
             fields["merchant"].read_only = True
 
         return fields
+
+    def validate(self, attrs):
+        """
+        Prevent moving an existing submission to another merchant through the API.
+        """
+        if self.instance and "merchant" in attrs and attrs["merchant"] != self.instance.merchant:
+            raise serializers.ValidationError("Merchant cannot be changed once set.")
+
+        return attrs

@@ -21,6 +21,7 @@ Merchants need a secure way to submit KYC information and documents. Reviewers n
 - File upload for PAN, Aadhaar, and bank statement
 - File validation for type and size
 - Reviewer vs merchant access control using `user.is_staff`
+- Public read access for demo purposes, protected write access
 - Dynamic SLA flag with `is_at_risk`
 - Reviewer queue ordered oldest first
 - Notification audit log for status changes
@@ -126,6 +127,7 @@ Access rules:
 
 - Reviewers can see all submissions
 - Merchants can only see submissions where `merchant.email == request.user.email`
+- `GET` requests are temporarily public for demo purposes
 
 ## API Overview
 
@@ -172,7 +174,7 @@ Maximum file size:
 
 - 5 MB
 
-Validation is enforced on the backend. Invalid uploads return HTTP `400` with field-level errors.
+Validation is enforced on the backend. Invalid uploads return HTTP `400` with a consistent error response.
 
 ## Example API Requests
 
@@ -227,9 +229,7 @@ Invalid status transition:
 
 ```json
 {
-  "status": [
-    "Invalid status transition from 'draft' to 'approved'."
-  ]
+  "error": "Invalid status transition from 'draft' to 'approved'."
 }
 ```
 
@@ -237,9 +237,7 @@ Invalid file type:
 
 ```json
 {
-  "pan_document": [
-    "Unsupported file type. Allowed types are: pdf, jpg, jpeg, png."
-  ]
+  "error": "pan_document: Unsupported file type. Allowed types are: pdf, jpg, jpeg, png."
 }
 ```
 
@@ -247,9 +245,7 @@ Oversized file:
 
 ```json
 {
-  "pan_document": [
-    "File size must not exceed 5 MB."
-  ]
+  "error": "pan_document: File size must not exceed 5 MB."
 }
 ```
 

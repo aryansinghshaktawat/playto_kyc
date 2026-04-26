@@ -94,18 +94,18 @@ class Merchant(models.Model):
         return self.email
 
 
-class NotificationLog(models.Model):
+class Notification(models.Model):
     """Audit log for important KYC events such as state changes."""
 
     merchant = models.ForeignKey(
         Merchant,
         on_delete=models.CASCADE,
-        related_name="notification_logs",
+        related_name="notifications",
     )
     submission = models.ForeignKey(
         "KYCSubmission",
         on_delete=models.CASCADE,
-        related_name="notification_logs",
+        related_name="notifications",
     )
     event_type = models.CharField(max_length=100)
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -122,7 +122,10 @@ class KYCSubmissionQuerySet(models.QuerySet):
     """Query helpers used by merchant and reviewer API flows."""
 
     def reviewer_queue(self):
-        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by("created_at", "id")
+        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by(
+            "created_at",
+            "id",
+        )
 
 
 class KYCSubmission(models.Model):
@@ -184,7 +187,20 @@ class KYCSubmission(models.Model):
         if self.status not in AT_RISK_STATUSES or not self.created_at:
             return False
 
-        return self.status_changed_at <= timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
+        return self.created_at <= timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
+
+    def missing_required_documents(self):
+        """Return a list of required document field labels that are still missing."""
+        missing_documents = []
+
+        if not self.pan_document:
+            missing_documents.append("pan_document")
+        if not self.aadhaar_document:
+            missing_documents.append("aadhaar_document")
+        if not self.bank_statement:
+            missing_documents.append("bank_statement")
+
+        return missing_documents
 
     def can_transition(self, new_status):
         """
@@ -238,12 +254,21 @@ class KYCSubmission(models.Model):
                 f"Invalid status transition from '{self.status}' to '{new_status}'."
             )
 
+        if new_status == STATUS_SUBMITTED:
+            missing_documents = self.missing_required_documents()
+            if missing_documents:
+                raise ValueError(
+                    "Missing required documents: "
+                    + ", ".join(missing_documents)
+                    + "."
+                )
+
         previous_status = self.status
         self.status = new_status
         self._allow_status_transition = True
         self.status_changed_at = timezone.now()
         self.save(update_fields=['status', 'status_changed_at', 'updated_at'])
-        NotificationLog.objects.create(
+        Notification.objects.create(
             merchant=self.merchant,
             submission=self,
             event_type="kyc_submission.status_changed",

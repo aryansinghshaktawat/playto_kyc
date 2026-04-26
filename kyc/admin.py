@@ -1,7 +1,7 @@
 from django.contrib import admin
 
-from .models import KYCSubmission, Merchant, NotificationLog
+from .models import KYCSubmission, Merchant, Notification
 
 admin.site.register(Merchant)
 admin.site.register(KYCSubmission)
-admin.site.register(NotificationLog)
+admin.site.register(Notification)

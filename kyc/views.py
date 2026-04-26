@@ -6,7 +6,7 @@ from rest_framework.authentication import BasicAuthentication, SessionAuthentica
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
-from .models import KYCSubmission, Merchant, STATUS_MORE_INFO_REQUESTED, STATUS_SUBMITTED
+from .models import KYCSubmission, Merchant
 from .serializers import KYCSubmissionSerializer
 
 
@@ -25,7 +25,12 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     queryset = KYCSubmission.objects.all()
     serializer_class = KYCSubmissionSerializer
     authentication_classes = [SessionAuthentication, BasicAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.AllowAny()]
+
+        return [permissions.IsAuthenticated()]
 
     def _get_request_merchant(self):
         try:
@@ -39,7 +44,7 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         if hasattr(exc, "message_dict"):
             raise ValidationError(exc.message_dict)
 
-        raise ValidationError({"detail": exc.messages})
+        raise ValidationError(exc.messages)
 
     def get_queryset(self):
         """
@@ -47,6 +52,11 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         submissions that match their authenticated email address.
         """
         queryset = KYCSubmission.objects.select_related("merchant")
+
+        if not self.request.user.is_authenticated:
+            if self.request.query_params.get("queue") in {"1", "true", "review"}:
+                return queryset.reviewer_queue()
+            return queryset
 
         if self.request.user.is_staff:
             if self.request.query_params.get("queue") in {"1", "true", "review"}:
@@ -79,33 +89,10 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def _validate_status_actor_permissions(self, current_status, new_status):
-        """
-        Merchants can only submit or resubmit documents.
-        Reviewer-only decisions stay on staff accounts.
-        """
-        if self.request.user.is_staff or new_status is None:
-            return
-
-        allowed_transitions = {
-            (None, STATUS_SUBMITTED),
-            ("draft", STATUS_SUBMITTED),
-            (STATUS_MORE_INFO_REQUESTED, STATUS_SUBMITTED),
-        }
-        if (current_status, new_status) not in allowed_transitions:
-            raise ValidationError(
-                {
-                    "status": [
-                        "Merchants can only submit or resubmit their own KYC submissions."
-                    ]
-                }
-            )
-
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         new_status = request.data.get("status")
-        self._validate_status_actor_permissions(instance.status, new_status)
 
         data = request.data.copy()
         if "status" in data:
@@ -125,7 +112,7 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         except DjangoValidationError as exc:
             self._raise_drf_validation_error(exc)
         except ValueError as exc:
-            raise ValidationError({"status": [str(exc)]})
+            raise ValidationError(str(exc))
 
         instance.refresh_from_db()
         response_serializer = self.get_serializer(instance)
