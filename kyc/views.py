@@ -47,14 +47,17 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     # SAFE MERCHANT FETCH
     # ======================
     def _get_request_merchant(self):
-        if not self.request.user.is_authenticated:
-            raise PermissionDenied("Authentication required.")
+        user = self.request.user
 
-        try:
-            return Merchant.objects.get(email=self.request.user.email)
-        except Merchant.DoesNotExist:
-            raise PermissionDenied("Merchant not found for this user.")
+        if not user.is_authenticated:
+            raise PermissionDenied("Authentication required")
 
+        merchant, _ = Merchant.objects.get_or_create(
+            email=user.email,
+            defaults={"name": user.username}
+        )
+
+        return merchant
     # ======================
     # ERROR HANDLER
     # ======================
