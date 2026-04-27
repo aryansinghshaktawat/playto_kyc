@@ -11,7 +11,7 @@ from .serializers import KYCSubmissionSerializer
 
 
 def home(request):
-    return HttpResponse("Playto KYC API is running")
+    return HttpResponse("API WORKING")
 
 
 class KYCSubmissionViewSet(viewsets.ModelViewSet):
