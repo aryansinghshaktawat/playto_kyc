@@ -26,12 +26,27 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = KYCSubmissionSerializer
     authentication_classes = [SessionAuthentication, BasicAuthentication]
 
+    # ======================
+    # 🔥 IMPORTANT FIX (ADD THIS)
+    # ======================
+    def get_serializer_context(self):
+        """
+        Pass request into serializer so we can build absolute file URLs.
+        """
+        return {"request": self.request}
+
+    # ======================
+    # PERMISSIONS
+    # ======================
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:
             return [permissions.AllowAny()]
 
         return [permissions.IsAuthenticated()]
 
+    # ======================
+    # HELPERS
+    # ======================
     def _get_request_merchant(self):
         try:
             return Merchant.objects.get(email=self.request.user.email)
@@ -46,10 +61,13 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
 
         raise ValidationError(exc.messages)
 
+    # ======================
+    # QUERYSET LOGIC
+    # ======================
     def get_queryset(self):
         """
-        Reviewers can inspect every submission. Merchants are restricted to
-        submissions that match their authenticated email address.
+        Reviewers can inspect every submission.
+        Merchants only see their own submissions.
         """
         queryset = KYCSubmission.objects.select_related("merchant")
 
@@ -65,11 +83,10 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
 
         return queryset.filter(merchant__email=self.request.user.email)
 
+    # ======================
+    # CREATE
+    # ======================
     def perform_create(self, serializer):
-        """
-        Prevent merchants from creating submissions for another merchant by
-        binding the record to the authenticated merchant email.
-        """
         if self.request.user.is_staff:
             serializer.save()
             return
@@ -89,6 +106,9 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    # ======================
+    # UPDATE + STATE MACHINE
+    # ======================
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
@@ -107,8 +127,10 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
                     serializer.save()
                 else:
                     serializer.save(merchant=self._get_request_merchant())
+
                 if new_status is not None:
                     instance.transition_to(new_status)
+
         except DjangoValidationError as exc:
             self._raise_drf_validation_error(exc)
         except ValueError as exc:
