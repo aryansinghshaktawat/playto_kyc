@@ -8,12 +8,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY
 # ======================
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "unsafe-secret-key")
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "2j#2v6q!z9v$4!4e1x@8k0x!5s@r9n#7m^q1d%w3y*8u0k!m@p",
+)
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
+DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("1", "true", "yes")
 
 # For Render and testing set to wildcard. In production restrict this.
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    return os.environ.get(name, str(default)).lower() in ("1", "true", "yes", "on")
 
 
 # ======================
@@ -38,12 +45,16 @@ INSTALLED_APPS = [
 # ======================
 
 REST_FRAMEWORK = {
-    "EXCEPTION_HANDLER": "kyc.exceptions.custom_exception_handler",
-    # For testing and to enable the browsable API POST button, allow any.
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",
     ],
+    # Keep JSON responses stable for APIs even on bad requests.
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ],
 }
+
 
 
 # ======================
@@ -55,6 +66,13 @@ LOGGING = {
     "disable_existing_loggers": False,
     "handlers": {
         "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "kyc": {
+            "handlers": ["console"],
+            "level": os.environ.get("KYC_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
     },
     "root": {
         "handlers": ["console"],
@@ -133,6 +151,27 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# NOTE for Render/production:
+# Local filesystem uploads are ephemeral on many PaaS providers.
+# Move MEDIA storage to cloud object storage (S3/R2/GCS) for durability.
+
+
+# ======================
+# SECURITY (PRODUCTION)
+# ======================
+
+SECURE_SSL_REDIRECT = _env_bool("DJANGO_SECURE_SSL_REDIRECT", not DEBUG)
+SESSION_COOKIE_SECURE = _env_bool("DJANGO_SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool("DJANGO_CSRF_COOKIE_SECURE", not DEBUG)
+
+SECURE_HSTS_SECONDS = int(
+    os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000" if not DEBUG else "0")
+)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool(
+    "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", not DEBUG
+)
+SECURE_HSTS_PRELOAD = _env_bool("DJANGO_SECURE_HSTS_PRELOAD", not DEBUG)
 
 
 # ======================
