@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - PORT=8000
+      - DJANGO_DEBUG=False
+      - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+      - DATABASE_URL=sqlite:////data/db.sqlite3
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - data_volume:/data
+    restart: always
+
+volumes:
+  static_volume:
+  media_volume:
+  data_volume:
+

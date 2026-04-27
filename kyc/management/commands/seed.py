@@ -3,13 +3,27 @@ from django.core.management.base import BaseCommand
 
 from kyc.models import KYCSubmission, Merchant, STATUS_DRAFT, STATUS_UNDER_REVIEW
 
-
 class Command(BaseCommand):
-    help = "Seed initial data: 2 merchants and 1 reviewer (admin user)."
+    help = "Seed initial data: submitted admin user, 2 merchants, and 1 reviewer."
 
     def handle(self, *args, **options):
         User = get_user_model()
 
+        # 1. --- YOUR SUBMITTED ADMIN USER ---
+        aryan, aryan_created = User.objects.get_or_create(
+            username="Aryan",
+            defaults={
+                "email": "aryan@playto.test",
+                "is_staff": True,
+                "is_superuser": True,
+            },
+        )
+        aryan.set_password("aryan1234")
+        aryan.is_staff = True
+        aryan.is_superuser = True
+        aryan.save(update_fields=["password", "is_staff", "is_superuser"])
+        
+        # 2. --- TEST REVIEWER ---
         reviewer, reviewer_created = User.objects.get_or_create(
             username="reviewer1",
             defaults={
@@ -23,6 +37,7 @@ class Command(BaseCommand):
         reviewer.is_superuser = True
         reviewer.save(update_fields=["password", "is_staff", "is_superuser"])
 
+        # 3. --- TEST MERCHANTS ---
         merchant_user_1, _ = User.objects.get_or_create(
             username="merchant1",
             defaults={"email": "merchant1@example.com"},
@@ -68,19 +83,11 @@ class Command(BaseCommand):
             },
         )
 
+        # --- TERMINAL OUTPUT ---
         self.stdout.write(self.style.SUCCESS("Seed complete."))
-        self.stdout.write(
-            f"Reviewer: {reviewer.username} ({'created' if reviewer_created else 'updated'})"
-        )
-        self.stdout.write(
-            f"Merchant 1: {merchant_1.email} ({'created' if m1_created else 'existing'})"
-        )
-        self.stdout.write(
-            f"Merchant 2: {merchant_2.email} ({'created' if m2_created else 'existing'})"
-        )
-        self.stdout.write(
-            f"Draft submission: {draft_submission.business_name} ({'created' if draft_created else 'existing'})"
-        )
-        self.stdout.write(
-            f"Under review submission: {review_submission.business_name} ({'created' if review_created else 'existing'})"
-        )
+        self.stdout.write(f"Submitted Admin: {aryan.username} ({'created' if aryan_created else 'updated'})")
+        self.stdout.write(f"Reviewer: {reviewer.username} ({'created' if reviewer_created else 'updated'})")
+        self.stdout.write(f"Merchant 1: {merchant_1.email} ({'created' if m1_created else 'existing'})")
+        self.stdout.write(f"Merchant 2: {merchant_2.email} ({'created' if m2_created else 'existing'})")
+        self.stdout.write(f"Draft submission: {draft_submission.business_name} ({'created' if draft_created else 'existing'})")
+        self.stdout.write(f"Under review submission: {review_submission.business_name} ({'created' if review_created else 'existing'})")
