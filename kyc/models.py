@@ -68,20 +68,31 @@ validators = [validate_file_size, validate_document_type]
 # ================== MODELS ==================
 
 class Merchant(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
+    phone = models.CharField(max_length=15, default="")
 
     def __str__(self):
         return self.email
 
 
 class Notification(models.Model):
-    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE)
-    submission = models.ForeignKey("KYCSubmission", on_delete=models.CASCADE)
+    merchant = models.ForeignKey(
+        Merchant,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    submission = models.ForeignKey(
+        "KYCSubmission",
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
     event_type = models.CharField(max_length=100)
     payload = models.JSONField(default=dict)
     timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
 
 
 class KYCSubmissionQuerySet(models.QuerySet):
@@ -90,19 +101,34 @@ class KYCSubmissionQuerySet(models.QuerySet):
 
 
 class KYCSubmission(models.Model):
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
-    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE)
-    reviewer = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    merchant = models.ForeignKey(
+        Merchant,
+        on_delete=models.CASCADE,
+        related_name="submissions",
+    )
 
     business_name = models.CharField(max_length=255)
     business_type = models.CharField(max_length=100)
-    monthly_volume = models.DecimalField(max_digits=12, decimal_places=2)
+    monthly_volume = models.FloatField()
 
-    pan_document = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
-    aadhaar_document = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
-    bank_statement = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
+    pan_document = models.FileField(
+        upload_to=upload_path,
+        validators=validators,
+        null=True,
+        blank=True,
+    )
+    aadhaar_document = models.FileField(
+        upload_to=upload_path,
+        validators=validators,
+        null=True,
+        blank=True,
+    )
+    bank_statement = models.FileField(
+        upload_to=upload_path,
+        validators=validators,
+        null=True,
+        blank=True,
+    )
 
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     status_changed_at = models.DateTimeField(default=timezone.now)
@@ -111,6 +137,9 @@ class KYCSubmission(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = KYCSubmissionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["created_at", "id"]
 
     # ================== STATE MACHINE ==================
 
@@ -128,9 +157,7 @@ class KYCSubmission(models.Model):
         return missing
 
     def assign_reviewer(self):
-        reviewer = User.objects.filter(is_staff=True).first()
-        if reviewer:
-            self.reviewer = reviewer
+        return
 
     def transition_to(self, new_status):
 
@@ -141,12 +168,11 @@ class KYCSubmission(models.Model):
             missing = self.missing_documents()
             if missing:
                 raise ValueError(f"Missing docs: {', '.join(missing)}")
-            self.assign_reviewer()
 
         old_status = self.status
         self.status = new_status
         self.status_changed_at = timezone.now()
-        self.save()
+        self.save(update_fields=["status", "status_changed_at", "updated_at"])
 
         Notification.objects.create(
             merchant=self.merchant,
@@ -163,3 +189,8 @@ class KYCSubmission(models.Model):
 
     def __str__(self):
         return f"{self.business_name} ({self.status})"
+
+
+# Keep backwards compatibility with historical migrations.
+def kyc_document_upload_path(instance, filename):
+    return upload_path(instance, filename)

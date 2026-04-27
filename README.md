@@ -176,7 +176,175 @@ python manage.py migrate
 
 ### 5. Create Superuser
 
+<<<<<<< HEAD
 ```bash id="4rt3bf"
+=======
+The API will be available at:
+
+- [http://127.0.0.1:8000/api/v1/kyc/](http://127.0.0.1:8000/api/v1/kyc/)
+
+## Authentication and Access Control
+
+This project uses Django's built-in `User` model.
+
+- `is_staff = True` means reviewer
+- `is_staff = False` means merchant
+
+Access rules:
+
+- Reviewers can see all submissions
+- Merchants can only see submissions where `merchant.email == request.user.email`
+- `GET` requests are temporarily public for demo purposes
+
+## API Overview
+
+Base path:
+
+- `/api/v1/`
+
+Main endpoint:
+
+- `GET /api/v1/kyc/`
+- `POST /api/v1/kyc/`
+- `GET /api/v1/kyc/<id>/`
+- `PATCH /api/v1/kyc/<id>/`
+- `PUT /api/v1/kyc/<id>/`
+- `DELETE /api/v1/kyc/<id>/`
+
+Reviewer queue:
+
+- `GET /api/v1/kyc/?queue=true`
+
+## State Machine
+
+Allowed transitions:
+
+- `draft -> submitted`
+- `submitted -> under_review`
+- `under_review -> approved`
+- `under_review -> rejected`
+- `under_review -> more_info_requested`
+- `more_info_requested -> submitted`
+
+The logic lives inside the model so status rules are not scattered across views.
+
+## File Upload Rules
+
+Allowed file types:
+
+- PDF
+- JPG
+- JPEG
+- PNG
+
+Maximum file size:
+
+- 5 MB
+
+Validation is enforced on the backend. Invalid uploads return HTTP `400` with a consistent error response.
+
+## Example API Requests
+
+### 1. Create a KYC submission
+
+```bash
+curl -u merchant1:password -X POST http://127.0.0.1:8000/api/v1/kyc/ \
+  -F "business_name=Acme Pvt Ltd" \
+  -F "business_type=Ecommerce" \
+  -F "monthly_volume=250000" \
+  -F "pan_document=@/absolute/path/pan.pdf" \
+  -F "aadhaar_document=@/absolute/path/aadhaar.jpg" \
+  -F "bank_statement=@/absolute/path/bank.png"
+```
+
+Example success response:
+
+```json
+{
+  "id": 1,
+  "merchant": 1,
+  "business_name": "Acme Pvt Ltd",
+  "business_type": "Ecommerce",
+  "monthly_volume": 250000.0,
+  "pan_document": "http://127.0.0.1:8000/media/kyc_documents/merchant_1/pan.pdf",
+  "aadhaar_document": "http://127.0.0.1:8000/media/kyc_documents/merchant_1/aadhaar.jpg",
+  "bank_statement": "http://127.0.0.1:8000/media/kyc_documents/merchant_1/bank.png",
+  "status": "draft",
+  "is_at_risk": false,
+  "created_at": "2026-04-26T18:00:00Z",
+  "updated_at": "2026-04-26T18:00:00Z"
+}
+```
+
+### 2. Submit a draft KYC submission
+
+```bash
+curl -u merchant1:password -X PATCH http://127.0.0.1:8000/api/v1/kyc/1/ \
+  -H "Content-Type: application/json" \
+  -d '{"status":"submitted"}'
+```
+
+### 3. Reviewer queue
+
+```bash
+curl -u reviewer1:password "http://127.0.0.1:8000/api/v1/kyc/?queue=true"
+```
+
+## Example Error Responses
+
+Invalid status transition:
+
+```json
+{
+  "error": "Invalid status transition from 'draft' to 'approved'."
+}
+```
+
+Invalid file type:
+
+```json
+{
+  "error": "pan_document: Unsupported file type. Allowed types are: pdf, jpg, jpeg, png."
+}
+```
+
+Oversized file:
+
+```json
+{
+  "error": "pan_document: File size must not exceed 5 MB."
+}
+```
+
+## How to Test
+
+1. Start the server with `python manage.py runserver`
+2. Open the DRF browsable API at [http://127.0.0.1:8000/api/v1/kyc/](http://127.0.0.1:8000/api/v1/kyc/)
+3. Log in with a Django user
+4. Use `multipart/form-data` for file uploads
+5. Test valid and invalid transitions
+6. Test merchant vs reviewer access using separate users
+
+### Automated test run
+
+```bash
+python manage.py test -v 2
+```
+
+What is covered:
+
+- valid state transition (`submitted -> under_review`)
+- invalid transition rejection (`draft -> approved`)
+- file validation (invalid file type rejected)
+- permission enforcement (merchant cannot approve)
+- auto merchant assignment from logged-in user email
+
+## Seed Data Instructions
+
+Create a superuser or reviewer:
+
+```bash
+>>>>>>> 9e5cee1 (refactor: enhance KYC submission workflow with improved state transitions, validation, and error handling; add automated tests and seed data command)
 python manage.py createsuperuser
 ```
 
@@ -204,7 +372,32 @@ http://127.0.0.1:8000/api/v1/
 http://127.0.0.1:8000/api-auth/login/
 ```
 
+<<<<<<< HEAD
 ---
+=======
+### Recommended one-command seed
+
+```bash
+python manage.py seed
+```
+
+This command creates/updates:
+
+- reviewer admin user: `reviewer1` / `password123`
+- merchant user: `merchant1` / `password123`
+- merchant user: `merchant2` / `password123`
+- merchant records for `merchant1@example.com` and `merchant2@example.com`
+
+## Known Limitations
+
+- File uploads currently use local filesystem storage; on Render/PaaS this can be ephemeral.
+  Use S3/R2/GCS for persistent production storage.
+- Merchant linkage is based on matching `User.email` and `Merchant.email`.
+  If they do not match, a merchant record will be auto-created on first submission.
+- This project currently uses session auth for local testing; token/JWT auth can be added for frontend/mobile clients.
+
+## Deployment
+>>>>>>> 9e5cee1 (refactor: enhance KYC submission workflow with improved state transitions, validation, and error handling; add automated tests and seed data command)
 
 ##  Seed Data
 
