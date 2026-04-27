@@ -66,6 +66,7 @@ INSTALLED_APPS = [
 
     "rest_framework",
     "kyc",
+    "corsheaders",
 ]
 
 
@@ -131,6 +132,7 @@ LOGGING = {
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # IMPORTANT for static files in production
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -154,20 +156,20 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 _database_url = os.environ.get("DATABASE_URL", "").strip()
 
-if _database_url.startswith("sqlite"):
+if _database_url:
     DATABASES = {
         "default": dj_database_url.parse(
             _database_url,
             conn_max_age=600,
+            ssl_require=False if _database_url.startswith("sqlite") else _env_bool("DJANGO_DB_SSL_REQUIRE", not DEBUG),
         )
     }
 else:
     DATABASES = {
-        "default": dj_database_url.config(
-            default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-            conn_max_age=600,
-            ssl_require=_env_bool("DJANGO_DB_SSL_REQUIRE", not DEBUG),
-        )
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
 
 
@@ -249,4 +251,13 @@ TEMPLATES = [
             ],
         },
     },
+]
+
+# ======================
+# CORS CONFIGURATION
+# ======================
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "https://playto-kyc.shaktawat.in",
+    "http://localhost:3000",
 ]
