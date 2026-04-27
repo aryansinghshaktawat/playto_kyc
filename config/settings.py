@@ -5,6 +5,13 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOGIN_REDIRECT_URL = "/api/v1/kyc/"
+RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+ON_RENDER = bool(RENDER_EXTERNAL_HOSTNAME) or os.environ.get("RENDER", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # ======================
 # SECURITY
@@ -15,7 +22,10 @@ SECRET_KEY = os.environ.get(
     "2j#2v6q!z9v$4!4e1x@8k0x!5s@r9n#7m^q1d%w3y*8u0k!m@p",
 )
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("1", "true", "yes")
+DEBUG = os.environ.get(
+    "DJANGO_DEBUG",
+    "False" if ON_RENDER else "True",
+).lower() in ("1", "true", "yes")
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -23,11 +33,19 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+if RENDER_EXTERNAL_HOSTNAME and RENDER_EXTERNAL_HOSTNAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
     if origin.strip()
 ]
+
+if RENDER_EXTERNAL_HOSTNAME:
+    render_origin = f"https://{RENDER_EXTERNAL_HOSTNAME}"
+    if render_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(render_origin)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -123,7 +141,7 @@ DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
         conn_max_age=600,
-        ssl_require=not DEBUG,
+        ssl_require=_env_bool("DJANGO_DB_SSL_REQUIRE", not DEBUG),
     )
 }
 

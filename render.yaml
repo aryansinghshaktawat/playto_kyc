@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: playto-kyc
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi:application
+    preDeployCommand: python manage.py migrate
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "${RENDER_EXTERNAL_HOSTNAME}"
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: "https://${RENDER_EXTERNAL_HOSTNAME}"
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: "True"
+      - key: DJANGO_SESSION_COOKIE_SECURE
+        value: "True"
+      - key: DJANGO_CSRF_COOKIE_SECURE
+        value: "True"
+      - key: DJANGO_SECURE_HSTS_SECONDS
+        value: "31536000"
+      - key: DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS
+        value: "True"
+      - key: DJANGO_SECURE_HSTS_PRELOAD
+        value: "True"
+      - key: DJANGO_DB_SSL_REQUIRE
+        value: "True"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: playto-kyc-db
+          property: connectionString
+
+databases:
+  - name: playto-kyc-db
+    plan: free
