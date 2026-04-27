@@ -15,9 +15,9 @@ class KYCSubmissionSerializer(serializers.ModelSerializer):
     is_at_risk = serializers.BooleanField(read_only=True)
     merchant = serializers.PrimaryKeyRelatedField(read_only=True)
 
-    pan_document = serializers.FileField(required=False, allow_null=True)
-    aadhaar_document = serializers.FileField(required=False, allow_null=True)
-    bank_statement = serializers.FileField(required=False, allow_null=True)
+    pan_document = serializers.FileField(required=False, allow_null=True, allow_empty_file=False)
+    aadhaar_document = serializers.FileField(required=False, allow_null=True, allow_empty_file=False)
+    bank_statement = serializers.FileField(required=False, allow_null=True, allow_empty_file=False)
 
     class Meta:
         model = KYCSubmission
@@ -60,6 +60,32 @@ class KYCSubmissionSerializer(serializers.ModelSerializer):
         if uploaded_file.size > MAX_UPLOAD_SIZE:
             raise serializers.ValidationError(
                 f"{field_label}: file size must not exceed 5MB."
+            )
+
+        current_pos = None
+        if hasattr(uploaded_file, "tell") and hasattr(uploaded_file, "seek"):
+            try:
+                current_pos = uploaded_file.tell()
+            except Exception:
+                current_pos = None
+
+        header = uploaded_file.read(16)
+        if current_pos is not None:
+            uploaded_file.seek(current_pos)
+
+        if extension == ".pdf" and not header.startswith(b"%PDF-"):
+            raise serializers.ValidationError(
+                f"{field_label}: invalid PDF file signature."
+            )
+
+        if extension in {".jpg", ".jpeg"} and not header.startswith(b"\xff\xd8\xff"):
+            raise serializers.ValidationError(
+                f"{field_label}: invalid JPEG file signature."
+            )
+
+        if extension == ".png" and not header.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise serializers.ValidationError(
+                f"{field_label}: invalid PNG file signature."
             )
 
         return uploaded_file

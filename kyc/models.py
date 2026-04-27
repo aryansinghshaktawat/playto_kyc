@@ -1,7 +1,9 @@
 import os
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 
+from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -58,12 +60,38 @@ def validate_document_type(file):
         raise ValidationError("Invalid file type")
 
 
+def validate_document_signature(file):
+    ext = os.path.splitext(file.name)[1].lower().lstrip(".")
+
+    # Read small header bytes without breaking later file handling.
+    current_pos = None
+    if hasattr(file, "tell") and hasattr(file, "seek"):
+        try:
+            current_pos = file.tell()
+        except Exception:
+            current_pos = None
+
+    header = file.read(16)
+
+    if current_pos is not None:
+        file.seek(current_pos)
+
+    if ext == "pdf" and not header.startswith(b"%PDF-"):
+        raise ValidationError("Invalid PDF file signature")
+
+    if ext in ("jpg", "jpeg") and not header.startswith(b"\xff\xd8\xff"):
+        raise ValidationError("Invalid JPEG file signature")
+
+    if ext == "png" and not header.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValidationError("Invalid PNG file signature")
+
+
 def upload_path(instance, filename):
     ext = os.path.splitext(filename)[1]
     return f"kyc_documents/{instance.merchant_id}/{uuid.uuid4()}{ext}"
 
 
-validators = [validate_file_size, validate_document_type]
+validators = [validate_file_size, validate_document_type, validate_document_signature]
 
 # ================== MODELS ==================
 
@@ -109,7 +137,11 @@ class KYCSubmission(models.Model):
 
     business_name = models.CharField(max_length=255)
     business_type = models.CharField(max_length=100)
-    monthly_volume = models.FloatField()
+    monthly_volume = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
 
     pan_document = models.FileField(
         upload_to=upload_path,
@@ -130,10 +162,15 @@ class KYCSubmission(models.Model):
         blank=True,
     )
 
-    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+        db_index=True,
+    )
     status_changed_at = models.DateTimeField(default=timezone.now)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = KYCSubmissionQuerySet.as_manager()
@@ -160,14 +197,20 @@ class KYCSubmission(models.Model):
         return
 
     def transition_to(self, new_status, reason=None):
-
         if not self.can_transition(new_status):
-            raise ValueError(f"Invalid transition {self.status} → {new_status}")
+            allowed_next = ALLOWED_TRANSITIONS.get(self.status, [])
+            raise ValueError(
+                f"Invalid transition {self.status} → {new_status}. "
+                f"Allowed: {allowed_next if allowed_next else 'no further transitions'}"
+            )
 
         if new_status == STATUS_SUBMITTED:
             missing = self.missing_documents()
             if missing:
                 raise ValueError(f"Missing docs: {', '.join(missing)}")
+
+        if new_status in (STATUS_REJECTED, STATUS_MORE_INFO_REQUESTED) and not reason:
+            raise ValueError("A reason is required for reject/request_info transitions")
 
         old_status = self.status
         self.status = new_status

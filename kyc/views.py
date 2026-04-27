@@ -144,6 +144,41 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=["post"])
+    def transition(self, request, pk=None):
+        requested_status = request.data.get("status")
+        if not requested_status:
+            return Response(
+                {"error": "Missing required field: status."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        requested_status = str(requested_status).strip().lower()
+        allowed_statuses = {
+            "submitted",
+            "under_review",
+            "approved",
+            "rejected",
+            "more_info_requested",
+        }
+        if requested_status not in allowed_statuses:
+            return Response(
+                {
+                    "error": "Invalid target status.",
+                    "allowed_statuses": sorted(allowed_statuses),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reviewer_statuses = {"under_review", "approved", "rejected", "more_info_requested"}
+        if requested_status in reviewer_statuses and not request.user.is_staff:
+            raise PermissionDenied("Only reviewers can perform this transition.")
+
+        if requested_status == "submitted" and request.user.is_staff:
+            raise PermissionDenied("Reviewers cannot submit merchant KYC records.")
+
+        return self._transition(request, pk, requested_status)
+
     # ======================
     # SUBMIT
     # ======================
@@ -195,8 +230,11 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     # ======================
     @action(detail=False, methods=["get"])
     def at_risk(self, request):
-        qs = self.get_queryset()
-        qs = [x for x in qs if x.is_at_risk]
+        cutoff = timezone.now() - timedelta(hours=24)
+        qs = self.get_queryset().filter(
+            status__in=["submitted", "under_review"],
+            created_at__lt=cutoff,
+        )
         return Response(self.get_serializer(qs, many=True).data)
 
     @action(detail=False, methods=["get"])

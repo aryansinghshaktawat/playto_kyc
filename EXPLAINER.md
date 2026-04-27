@@ -1,217 +1,8 @@
-# KYC Submission & Review System
-
-##  Overview
-
-This project implements a **production-ready KYC (Know Your Customer) workflow system** using Django and Django REST Framework.
-
-It is designed to simulate a real-world onboarding pipeline where merchants submit KYC details and reviewers process them through a controlled lifecycle.
-
----
-
-##  Key Design Principles
-
-* **State Machine Driven Workflow**
-* **Role-Based Access Control**
-* **Secure File Handling**
-* **Scalable API Design**
-* **Audit & Notification System**
-
----
-
-##  KYC Lifecycle (State Machine)
-
-The system enforces strict transitions:
-
-```
-Draft → Submitted → Under Review → Approved / Rejected
-                          ↓
-                  More Info Requested → Submitted
-```
-
-###  Allowed Transitions
-
-| From                | To                                        |
-| ------------------- | ----------------------------------------- |
-| Draft               | Submitted                                 |
-| Submitted           | Under Review                              |
-| Under Review        | Approved / Rejected / More Info Requested |
-| More Info Requested | Submitted                                 |
-
-###  Invalid transitions are blocked at model level
-
-This ensures:
-
-* Data integrity
-* No illegal state jumps
-* Predictable workflow
-
----
-
-## 👥 Roles & Permissions
-
-###  Merchant
-
-* Create KYC submission
-* Upload required documents
-* Submit KYC
-
-###  Reviewer (Admin/Staff)
-
-* View review queue
-* Approve / Reject submissions
-* Request additional information
-
-###  Enforcement
-
-* Merchants can only access their own data
-* Review actions restricted to staff users
-
----
-
-##  File Upload Handling
-
-* Supported formats: **PDF, JPG, PNG**
-* Max file size: **5MB**
-* Validation includes:
-
-  * Extension check
-  * File size limit
-* Files stored per merchant:
-
-```
-kyc_documents/<merchant_id>/
-```
-
----
-
-## ⏱ SLA Monitoring
-
-Each submission is monitored for processing delay.
-
-* SLA threshold: **24 hours**
-* Submissions in `submitted` or `under_review`:
-
-  * Marked `is_at_risk = true` if delayed
-
-This helps identify bottlenecks in processing.
-
----
-
-##  Reviewer Queue
-
-Dedicated endpoint:
-
-```
-GET /api/v1/kyc/reviewer_queue/
-```
-
-* Returns submissions requiring action
-* Sorted by creation time (FIFO)
-
----
-
-##  Notification System
-
-Every status change generates a notification:
-
-```json
-{
-  "event_type": "status_changed",
-  "from": "submitted",
-  "to": "approved"
-}
-```
-
-This enables:
-
-* Audit trails
-* Event tracking
-* Future integrations (email/webhooks)
-
----
-
-##  API Endpoints
-
-### Merchant Actions
-
-* `POST /api/v1/kyc/` → Create submission
-* `POST /api/v1/kyc/{id}/submit/` → Submit KYC
-
----
-
-### Reviewer Actions
-
-* `POST /api/v1/kyc/{id}/approve/`
-* `POST /api/v1/kyc/{id}/reject/`
-* `POST /api/v1/kyc/{id}/request_info/`
-
----
-
-### System Endpoints
-
-* `GET /api/v1/kyc/reviewer_queue/`
-* `GET /api/v1/kyc/at_risk/`
-
----
-
-##  Technical Decisions
-
-###  State Machine at Model Level
-
-* Prevents bypass via API or admin
-* Ensures business rules are always enforced
-
-###  Atomic Transactions
-
-* Guarantees consistency during create/update
-
-###  Query Optimization
-
-* Uses `select_related` for efficient joins
-
-###  Separation of Concerns
-
-* Models → Business logic
-* Views → API control
-* Serializers → Data validation
-
----
-
-##  Challenges Faced
-
-* Handling file uploads safely on limited storage (Render free tier)
-* Preventing unauthorized status changes
-* Designing a flexible but strict workflow system
-
----
-
-##  Future Improvements
-
-* JWT Authentication (instead of session-based)
-* Cloud storage integration (AWS S3 / GCP)
-* Async processing (Celery)
-* Email/SMS notification system
-* Reviewer assignment strategies (load balancing)
-
----
-
-##  Conclusion
-
-This system demonstrates:
-
-* Real-world backend design
-* Workflow enforcement using state machines
-* Secure and scalable API architecture
-
-It is structured to be **production-ready and extensible**.
-
----
-
 # EXPLAINER.md
 
 ## 1) The State Machine
 
-**Where it lives:** `kyc/models.py` in `KYCSubmission.transition_to()` and `ALLOWED_TRANSITIONS`.
+**Where it lives:** `kyc/models.py` in `ALLOWED_TRANSITIONS` + `KYCSubmission.transition_to()`.
 
 ```python
 ALLOWED_TRANSITIONS = {
@@ -225,24 +16,21 @@ ALLOWED_TRANSITIONS = {
 
 def transition_to(self, new_status, reason=None):
     if not self.can_transition(new_status):
-        raise ValueError(f"Invalid transition {self.status} → {new_status}")
+        allowed_next = ALLOWED_TRANSITIONS.get(self.status, [])
+        raise ValueError(
+            f"Invalid transition {self.status} → {new_status}. "
+            f"Allowed: {allowed_next if allowed_next else 'no further transitions'}"
+        )
     ...
 ```
 
-**How illegal transitions are prevented:**
-- `can_transition()` checks `ALLOWED_TRANSITIONS`
-- if invalid, `ValueError` is raised
-- API catches this and returns HTTP 400 with a clear error message
+**How illegal transitions are blocked:** all transition endpoints call `transition_to()`. If transition is illegal, API returns HTTP 400 with the model error message.
 
 ---
 
 ## 2) The Upload
 
-**Where validation happens:**
-- Model validators in `kyc/models.py`:
-  - `validate_file_size`
-  - `validate_document_type`
-- Serializer checks in `kyc/serializers/__init__.py` for cleaner API errors
+**Where validation happens:** model validators in `kyc/models.py` and serializer checks in `kyc/serializers/__init__.py`.
 
 ```python
 MAX_UPLOAD_SIZE = 5 * 1024 * 1024
@@ -256,44 +44,45 @@ def validate_document_type(file):
     ext = os.path.splitext(file.name)[1].lower().lstrip(".")
     if ext not in ALLOWED_DOCUMENT_EXTENSIONS:
         raise ValidationError("Invalid file type")
+
+def validate_document_signature(file):
+    header = file.read(16)
+    ...
+    if ext == "pdf" and not header.startswith(b"%PDF-"):
+        raise ValidationError("Invalid PDF file signature")
 ```
 
-**If someone uploads 50MB:**
-- validation fails
-- API returns 400 with a clear message
-- file is not persisted
+**If someone uploads a 50MB file:** validation fails immediately with HTTP 400 (`File must be ≤ 5MB`), and the file is not accepted.
 
 ---
 
 ## 3) The Queue
 
-**Query used for reviewer queue:**
+**Query powering reviewer queue (`oldest first`):**
 
 ```python
 class KYCSubmissionQuerySet(models.QuerySet):
     def reviewer_queue(self):
-        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by("created_at")
+        return self.filter(status__in=[STATUS_SUBMITTED, STATUS_UNDER_REVIEW]).order_by("created_at")
 ```
 
-**SLA `at_risk` flag (dynamic):**
+**SLA flag (`at_risk`) is computed dynamically:**
 
 ```python
 @property
 def is_at_risk(self):
-    if self.status not in AT_RISK_STATUSES:
+    if self.status not in [STATUS_SUBMITTED, STATUS_UNDER_REVIEW]:
         return False
-    return self.created_at < timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
+    return self.created_at < timezone.now() - timedelta(hours=24)
 ```
 
-**Why this approach:**
-- queue is DB-filtered and oldest-first for fair processing
-- SLA is computed dynamically so it cannot go stale
+**Why this approach:** queue filtering is DB-driven and deterministic; `is_at_risk` is computed at read time so it never becomes stale.
 
 ---
 
 ## 4) The Auth
 
-**How merchant A is blocked from seeing merchant B data:** `kyc/views.py` in `get_queryset()`.
+**Merchant A cannot see Merchant B data check (`kyc/views.py`):**
 
 ```python
 def get_queryset(self):
@@ -303,23 +92,27 @@ def get_queryset(self):
     return self.queryset.filter(merchant__email=user.email)
 ```
 
-Also:
-- create/update/list require authentication
-- reviewer-only actions (`start_review`, `approve`, `reject`, `request_info`, `reviewer_queue`, `at_risk`, `reviewer_metrics`) require `IsAdminUser`
+**Reviewer-only actions:** `start_review`, `approve`, `reject`, `request_info`, `reviewer_queue`, `at_risk`, and `reviewer_metrics` use `IsAdminUser`.
+
+**Generic transition endpoint (`/api/v1/kyc/{id}/transition/`):** role checks are explicit:
+- merchant can only transition to `submitted`
+- reviewer can transition to review statuses (`under_review`, `approved`, `rejected`, `more_info_requested`)
 
 ---
 
 ## 5) The AI Audit
 
-**Buggy AI suggestion I rejected:**
-- AI suggested assigning merchant with `Merchant.objects.first()` as a fallback for unauthenticated requests.
+**Buggy AI output I rejected:** AI suggested fallback ownership like:
 
-**Why it was bad/insecure:**
-- could attach submission to wrong merchant
-- breaks tenant isolation
-- violates business rule that submission owner must match logged-in merchant
+```python
+merchant = Merchant.objects.first()
+```
 
-**What I replaced it with:**
+for submission creation when user mapping failed.
+
+**Why this is insecure:** it can attach merchant A’s submission to merchant B (tenant data isolation bug).
+
+**What I replaced it with:** deterministic mapping to authenticated identity:
 
 ```python
 def _get_merchant(self):
@@ -334,4 +127,4 @@ def _get_merchant(self):
     return merchant
 ```
 
-This ensures merchant ownership is deterministic and tied to authenticated identity.
+This guarantees ownership and prevents cross-tenant leakage.
