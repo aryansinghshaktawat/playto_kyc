@@ -39,10 +39,10 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     # PERMISSIONS
     # ======================
     def get_permissions(self):
-        if self.request.method in permissions.SAFE_METHODS:
-            return [permissions.AllowAny()]
-
-        return [permissions.IsAuthenticated()]
+        # For testing and Render deployment we'll allow any access.
+        # In production switch to IsAuthenticated as needed.
+        # return [permissions.IsAuthenticated()]
+        return [permissions.AllowAny()]
 
     # ======================
     # HELPERS

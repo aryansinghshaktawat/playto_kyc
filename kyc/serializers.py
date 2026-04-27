@@ -68,8 +68,17 @@ class KYCSubmissionSerializer(serializers.ModelSerializer):
         fields = super().get_fields()
         request = self.context.get("request")
 
-        if request and request.user.is_authenticated and not request.user.is_staff:
-            fields["merchant"].read_only = True
+        # If non-staff authenticated users are making the request, merchant
+        # should be read-only to avoid reassignment. Allow staff to set it.
+        if request and getattr(request, "user", None) is not None:
+            try:
+                is_staff = request.user.is_staff
+            except Exception:
+                is_staff = False
+
+            if not is_staff:
+                if "merchant" in fields:
+                    fields["merchant"].read_only = True
 
         return fields
 
