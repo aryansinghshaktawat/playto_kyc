@@ -1,19 +1,13 @@
-import logging
-
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import HttpResponse
 
-from rest_framework import permissions, status, viewsets
-from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError, PermissionDenied
 
 from kyc.models import KYCSubmission, Merchant
 from kyc.serializers import KYCSubmissionSerializer
-
-
-logger = logging.getLogger(__name__)
 
 
 def home(request):
@@ -21,179 +15,96 @@ def home(request):
 
 
 class KYCSubmissionViewSet(viewsets.ModelViewSet):
-    """
-    API endpoints for managing KYC submissions.
-    """
 
-    queryset = KYCSubmission.objects.all()
+    queryset = KYCSubmission.objects.select_related("merchant", "reviewer")
     serializer_class = KYCSubmissionSerializer
-    parser_classes = [MultiPartParser, FormParser]
-
-    # ======================
-    # SERIALIZER CONTEXT
-    # ======================
-    def get_serializer_context(self):
-        return {"request": self.request}
 
     # ======================
     # PERMISSIONS
     # ======================
     def get_permissions(self):
-        # ✅ For testing (change later for production)
-        # In production, prefer IsAuthenticated and assign merchant from auth user.
-        return [permissions.AllowAny()]
+        if self.action in ["transition", "approve", "reject", "request_info", "reviewer_queue"]:
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
 
     # ======================
-    # SAFE MERCHANT FETCH
+    # QUERYSET
     # ======================
-    def _get_request_merchant(self):
+    def get_queryset(self):
         user = self.request.user
+        if user.is_staff:
+            return self.queryset
+        return self.queryset.filter(merchant__email=user.email)
 
-        if not user.is_authenticated:
-            raise PermissionDenied("Authentication required")
-
+    # ======================
+    # MERCHANT
+    # ======================
+    def _get_merchant(self):
+        user = self.request.user
         merchant, _ = Merchant.objects.get_or_create(
             email=user.email,
             defaults={"name": user.username}
         )
-
         return merchant
-    # ======================
-    # ERROR HANDLER
-    # ======================
-    def _raise_drf_validation_error(self, exc):
-        if hasattr(exc, "message_dict"):
-            raise ValidationError(exc.message_dict)
-        raise ValidationError(exc.messages)
-
-    # ======================
-    # QUERYSET CONTROL
-    # ======================
-    def get_queryset(self):
-        queryset = KYCSubmission.objects.select_related("merchant")
-
-        if not self.request.user.is_authenticated:
-            return queryset
-
-        if self.request.user.is_staff:
-            return queryset
-
-        return queryset.filter(merchant__email=self.request.user.email)
 
     # ======================
     # CREATE
     # ======================
     def perform_create(self, serializer):
-        # Safe fallback for unauthenticated submissions (temporary testing mode).
-        merchant = None
-        if self.request.user.is_authenticated:
-            try:
-                merchant = self._get_request_merchant()
-            except PermissionDenied:
-                merchant = None
-
-        if merchant is None:
-            merchant = Merchant.objects.order_by("id").first()
-
-        if merchant is None:
-            raise ValidationError(
-                {
-                    "merchant": (
-                        "No merchant available for assignment. "
-                        "Create at least one Merchant record first."
-                    )
-                }
-            )
-
-        serializer.save(merchant=merchant)
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        try:
-            serializer.is_valid(raise_exception=True)
-
-            with transaction.atomic():
-                self.perform_create(serializer)
-
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        except ValidationError as exc:
-            # DRF validation errors (clean JSON response)
-            return Response({"error": exc.detail}, status=status.HTTP_400_BAD_REQUEST)
-        except DjangoValidationError as exc:
-            self._raise_drf_validation_error(exc)
-        except OSError as exc:
-            # Example: disk full, storage backend unavailable, write permission issues.
-            logger.exception("File storage error while creating KYC submission")
-            return Response(
-                {
-                    "error": "File upload/storage failed.",
-                    "detail": str(exc),
-                    "hint": (
-                        "For Render/production, prefer cloud object storage "
-                        "(S3/R2/GCS) instead of relying on ephemeral local disk."
-                    ),
-                },
-                status=status.HTTP_507_INSUFFICIENT_STORAGE,
-            )
-        except Exception as exc:
-            logger.exception("Unexpected error while creating KYC submission")
-            return Response(
-                {"error": "Unexpected server error.", "detail": str(exc)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        serializer.save(merchant=self._get_merchant())
 
     # ======================
-    # UPDATE + STATUS TRANSITION
+    # SUBMIT
     # ======================
-    def update(self, request, *args, **kwargs):
-        partial = kwargs.pop("partial", False)
-        instance = self.get_object()
-
-        new_status = request.data.get("status")
-
-        data = request.data.copy()
-        if "status" in data:
-            data.pop("status")
-
-        serializer = self.get_serializer(instance, data=data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        obj = self.get_object()
         try:
-            with transaction.atomic():
-                # ✅ safe merchant handling
-                if request.user.is_authenticated:
-                    serializer.save(merchant=self._get_request_merchant())
-                else:
-                    fallback_merchant = Merchant.objects.order_by("id").first()
-                    if fallback_merchant is None:
-                        raise ValidationError(
-                            {
-                                "merchant": (
-                                    "No merchant available for assignment. "
-                                    "Create at least one Merchant record first."
-                                )
-                            }
-                        )
-                    serializer.save(merchant=fallback_merchant)
+            obj.transition_to("submitted")
+        except ValueError as e:
+            raise ValidationError(str(e))
+        return Response(self.get_serializer(obj).data)
 
-                # ✅ status transition logic
-                if new_status is not None:
-                    instance.transition_to(new_status)
+    # ======================
+    # APPROVE
+    # ======================
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        obj = self.get_object()
+        obj.transition_to("approved")
+        return Response(self.get_serializer(obj).data)
 
-        except DjangoValidationError as exc:
-            self._raise_drf_validation_error(exc)
-        except ValueError as exc:
-            raise ValidationError(str(exc))
-        except OSError as exc:
-            logger.exception("File storage error while updating KYC submission")
-            raise ValidationError(
-                {
-                    "storage": (
-                        "File upload/storage failed while updating submission. "
-                        f"Detail: {exc}"
-                    )
-                }
-            )
+    # ======================
+    # REJECT
+    # ======================
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        obj = self.get_object()
+        obj.transition_to("rejected")
+        return Response(self.get_serializer(obj).data)
 
-        instance.refresh_from_db()
-        return Response(self.get_serializer(instance).data)
+    # ======================
+    # NEED MORE INFO
+    # ======================
+    @action(detail=True, methods=["post"])
+    def request_info(self, request, pk=None):
+        obj = self.get_object()
+        obj.transition_to("more_info_requested")
+        return Response(self.get_serializer(obj).data)
+
+    # ======================
+    # REVIEWER QUEUE
+    # ======================
+    @action(detail=False, methods=["get"])
+    def reviewer_queue(self, request):
+        qs = KYCSubmission.objects.reviewer_queue()
+        return Response(self.get_serializer(qs, many=True).data)
+
+    # ======================
+    # SLA
+    # ======================
+    @action(detail=False, methods=["get"])
+    def at_risk(self, request):
+        qs = self.get_queryset()
+        qs = [x for x in qs if x.is_at_risk]
+        return Response(self.get_serializer(qs, many=True).data)

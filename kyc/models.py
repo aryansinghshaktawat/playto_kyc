@@ -1,19 +1,27 @@
-from datetime import timedelta
 import os
+import uuid
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
+User = get_user_model()
 
-MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5 MB
+# ================== CONSTANTS ==================
+
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024
+
 ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"]
+
 STATUS_DRAFT = "draft"
 STATUS_SUBMITTED = "submitted"
 STATUS_UNDER_REVIEW = "under_review"
 STATUS_APPROVED = "approved"
 STATUS_REJECTED = "rejected"
 STATUS_MORE_INFO_REQUESTED = "more_info_requested"
+
 STATUS_CHOICES = [
     (STATUS_DRAFT, "Draft"),
     (STATUS_SUBMITTED, "Submitted"),
@@ -22,262 +30,136 @@ STATUS_CHOICES = [
     (STATUS_REJECTED, "Rejected"),
     (STATUS_MORE_INFO_REQUESTED, "More Info Requested"),
 ]
+
 ALLOWED_TRANSITIONS = {
     STATUS_DRAFT: [STATUS_SUBMITTED],
     STATUS_SUBMITTED: [STATUS_UNDER_REVIEW],
-    STATUS_UNDER_REVIEW: [
-        STATUS_APPROVED,
-        STATUS_REJECTED,
-        STATUS_MORE_INFO_REQUESTED,
-    ],
+    STATUS_UNDER_REVIEW: [STATUS_APPROVED, STATUS_REJECTED, STATUS_MORE_INFO_REQUESTED],
     STATUS_MORE_INFO_REQUESTED: [STATUS_SUBMITTED],
     STATUS_APPROVED: [],
     STATUS_REJECTED: [],
 }
+
 SLA_AT_RISK_HOURS = 24
+
 REVIEWER_QUEUE_STATUSES = [STATUS_SUBMITTED, STATUS_UNDER_REVIEW]
 AT_RISK_STATUSES = [STATUS_SUBMITTED, STATUS_UNDER_REVIEW]
-FILE_SIGNATURES = {
-    "pdf": [b"%PDF"],
-    "png": [b"\x89PNG\r\n\x1a\n"],
-    "jpg": [b"\xff\xd8\xff"],
-    "jpeg": [b"\xff\xd8\xff"],
-}
+
+# ================== VALIDATORS ==================
+
+def validate_file_size(file):
+    if file.size > MAX_UPLOAD_SIZE:
+        raise ValidationError("File must be ≤ 5MB")
 
 
-def validate_file_size(uploaded_file):
-    """Reject files larger than the supported document upload limit."""
-    if uploaded_file.size > MAX_UPLOAD_SIZE:
-        raise ValidationError("File size must not exceed 5 MB.")
+def validate_document_type(file):
+    ext = os.path.splitext(file.name)[1].lower().lstrip(".")
+    if ext not in ALLOWED_DOCUMENT_EXTENSIONS:
+        raise ValidationError("Invalid file type")
 
 
-def validate_document_type(uploaded_file):
-    """
-    Validate uploads on the backend by checking both extension and file signature.
-
-    This avoids trusting the client to tell us the file type.
-    """
-    extension = os.path.splitext(uploaded_file.name)[1].lower().lstrip(".")
-    if extension not in ALLOWED_DOCUMENT_EXTENSIONS:
-        allowed = ", ".join(ALLOWED_DOCUMENT_EXTENSIONS)
-        raise ValidationError(
-            f"Unsupported file type. Allowed types are: {allowed}."
-        )
-
-    signature = uploaded_file.read(8)
-    uploaded_file.seek(0)
-    if not any(signature.startswith(prefix) for prefix in FILE_SIGNATURES[extension]):
-        raise ValidationError(
-            "Uploaded file content does not match an allowed PDF, JPG, JPEG, or PNG file."
-        )
+def upload_path(instance, filename):
+    ext = os.path.splitext(filename)[1]
+    return f"kyc_documents/{instance.merchant_id}/{uuid.uuid4()}{ext}"
 
 
-def kyc_document_upload_path(instance, filename):
-    """Store KYC documents under a predictable merchant-specific path."""
-    extension = os.path.splitext(filename)[1].lower()
-    safe_name = os.path.splitext(filename)[0].replace(" ", "_")
-    return f"kyc_documents/merchant_{instance.merchant_id}/{safe_name}{extension}"
+validators = [validate_file_size, validate_document_type]
 
-
-document_validators = [
-    validate_file_size,
-    validate_document_type,
-]
-
+# ================== MODELS ==================
 
 class Merchant(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
-    phone = models.CharField(max_length=15)
 
     def __str__(self):
         return self.email
 
 
 class Notification(models.Model):
-    """Audit log for important KYC events such as state changes."""
-
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.CASCADE,
-        related_name="notifications",
-    )
-    submission = models.ForeignKey(
-        "KYCSubmission",
-        on_delete=models.CASCADE,
-        related_name="notifications",
-    )
+    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE)
+    submission = models.ForeignKey("KYCSubmission", on_delete=models.CASCADE)
     event_type = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict)
     timestamp = models.DateTimeField(auto_now_add=True)
-    payload = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        ordering = ["-timestamp"]
-
-    def __str__(self):
-        return f"{self.event_type} for merchant {self.merchant_id}"
 
 
 class KYCSubmissionQuerySet(models.QuerySet):
-    """Query helpers used by merchant and reviewer API flows."""
-
     def reviewer_queue(self):
-        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by(
-            "created_at",
-            "id",
-        )
+        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by("created_at")
 
 
 class KYCSubmission(models.Model):
-    """
-    Represents a merchant's KYC submission and enforces its review lifecycle.
 
-    The submission moves through a restricted set of statuses so the system
-    cannot skip important review steps or jump back into invalid states.
-    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.CASCADE,
-        related_name='submissions',
-    )
+    merchant = models.ForeignKey(Merchant, on_delete=models.CASCADE)
+    reviewer = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 
     business_name = models.CharField(max_length=255)
     business_type = models.CharField(max_length=100)
-    monthly_volume = models.FloatField()
-    pan_document = models.FileField(
-        upload_to=kyc_document_upload_path,
-        validators=document_validators,
-        blank=True,
-        null=True,
-    )
-    aadhaar_document = models.FileField(
-        upload_to=kyc_document_upload_path,
-        validators=document_validators,
-        blank=True,
-        null=True,
-    )
-    bank_statement = models.FileField(
-        upload_to=kyc_document_upload_path,
-        validators=document_validators,
-        blank=True,
-        null=True,
-    )
+    monthly_volume = models.DecimalField(max_digits=12, decimal_places=2)
+
+    pan_document = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
+    aadhaar_document = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
+    bank_statement = models.FileField(upload_to=upload_path, validators=validators, null=True, blank=True)
 
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     status_changed_at = models.DateTimeField(default=timezone.now)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
     objects = KYCSubmissionQuerySet.as_manager()
 
-    class Meta:
-        ordering = ["created_at", "id"]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._original_status = self.status
-        self._allow_status_transition = False
-
-    @property
-    def is_at_risk(self):
-        """
-        Mark pending submissions as at risk once they exceed the 24-hour SLA.
-        """
-        if self.status not in AT_RISK_STATUSES or not self.created_at:
-            return False
-
-        return self.created_at <= timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
-
-    def missing_required_documents(self):
-        """Return a list of required document field labels that are still missing."""
-        missing_documents = []
-
-        if not self.pan_document:
-            missing_documents.append("pan_document")
-        if not self.aadhaar_document:
-            missing_documents.append("aadhaar_document")
-        if not self.bank_statement:
-            missing_documents.append("bank_statement")
-
-        return missing_documents
+    # ================== STATE MACHINE ==================
 
     def can_transition(self, new_status):
-        """
-        Return True when moving from the current status to ``new_status`` is allowed.
-
-        This method is the single source of truth for the KYC submission state
-        machine, so all transition checks stay inside the model.
-        """
         return new_status in ALLOWED_TRANSITIONS.get(self.status, [])
 
-    def clean(self):
-        super().clean()
+    def missing_documents(self):
+        missing = []
+        if not self.pan_document:
+            missing.append("PAN")
+        if not self.aadhaar_document:
+            missing.append("Aadhaar")
+        if not self.bank_statement:
+            missing.append("Bank")
+        return missing
 
-        if self._state.adding and self.status != STATUS_DRAFT:
-            raise ValidationError(
-                {"status": "New submissions must start in 'draft' status."}
-            )
-
-        if not self._state.adding and self.status != self._original_status:
-            if not self._allow_status_transition:
-                raise ValidationError(
-                    {"status": "Status updates must use transition_to()."}
-                )
-
-            if self.status not in ALLOWED_TRANSITIONS.get(self._original_status, []):
-                raise ValidationError(
-                    {
-                        "status": (
-                            f"Invalid status transition from '{self._original_status}' "
-                            f"to '{self.status}'."
-                        )
-                    }
-                )
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
-        self._original_status = self.status
-        self._allow_status_transition = False
+    def assign_reviewer(self):
+        reviewer = User.objects.filter(is_staff=True).first()
+        if reviewer:
+            self.reviewer = reviewer
 
     def transition_to(self, new_status):
-        """
-        Move the submission to a new valid status and persist the change.
 
-        Raises:
-            ValueError: If the requested transition is not allowed by the
-            state machine.
-        """
         if not self.can_transition(new_status):
-            raise ValueError(
-                f"Invalid status transition from '{self.status}' to '{new_status}'."
-            )
+            raise ValueError(f"Invalid transition {self.status} → {new_status}")
 
         if new_status == STATUS_SUBMITTED:
-            missing_documents = self.missing_required_documents()
-            if missing_documents:
-                raise ValueError(
-                    "Missing required documents: "
-                    + ", ".join(missing_documents)
-                    + "."
-                )
+            missing = self.missing_documents()
+            if missing:
+                raise ValueError(f"Missing docs: {', '.join(missing)}")
+            self.assign_reviewer()
 
-        previous_status = self.status
+        old_status = self.status
         self.status = new_status
-        self._allow_status_transition = True
         self.status_changed_at = timezone.now()
-        self.save(update_fields=['status', 'status_changed_at', 'updated_at'])
+        self.save()
+
         Notification.objects.create(
             merchant=self.merchant,
             submission=self,
-            event_type="kyc_submission.status_changed",
-            payload={
-                "old_status": previous_status,
-                "new_status": new_status,
-                "submission_id": self.pk,
-            },
+            event_type="status_changed",
+            payload={"from": old_status, "to": new_status},
         )
 
+    @property
+    def is_at_risk(self):
+        if self.status not in AT_RISK_STATUSES:
+            return False
+        return self.created_at < timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
+
     def __str__(self):
-        return f"{self.business_name} - {self.status}"
+        return f"{self.business_name} ({self.status})"
