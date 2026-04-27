@@ -3,7 +3,7 @@ from django.urls import path, include
 from kyc.views import home
 
 urlpatterns = [
-    path("", home, name="home"),
-    path("admin/", admin.site.urls),
-    path("api/v1/", include("kyc.urls")),
+    path('', home),
+    path('admin/', admin.site.urls),
+    path('api/v1/kyc/', include('kyc.urls')),
 ]
