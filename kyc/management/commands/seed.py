@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 
-from kyc.models import Merchant
+from kyc.models import KYCSubmission, Merchant, STATUS_DRAFT, STATUS_UNDER_REVIEW
 
 
 class Command(BaseCommand):
@@ -48,6 +48,26 @@ class Command(BaseCommand):
             defaults={"name": "Merchant Two", "phone": "9999999992"},
         )
 
+        draft_submission, draft_created = KYCSubmission.objects.get_or_create(
+            merchant=merchant_1,
+            business_name="Merchant One Draft Co",
+            defaults={
+                "business_type": "Agency",
+                "monthly_volume": 3000,
+                "status": STATUS_DRAFT,
+            },
+        )
+
+        review_submission, review_created = KYCSubmission.objects.get_or_create(
+            merchant=merchant_2,
+            business_name="Merchant Two Review Co",
+            defaults={
+                "business_type": "Freelancer",
+                "monthly_volume": 5000,
+                "status": STATUS_UNDER_REVIEW,
+            },
+        )
+
         self.stdout.write(self.style.SUCCESS("Seed complete."))
         self.stdout.write(
             f"Reviewer: {reviewer.username} ({'created' if reviewer_created else 'updated'})"
@@ -57,4 +77,10 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             f"Merchant 2: {merchant_2.email} ({'created' if m2_created else 'existing'})"
+        )
+        self.stdout.write(
+            f"Draft submission: {draft_submission.business_name} ({'created' if draft_created else 'existing'})"
+        )
+        self.stdout.write(
+            f"Under review submission: {review_submission.business_name} ({'created' if review_created else 'existing'})"
         )

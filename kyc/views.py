@@ -1,8 +1,10 @@
 import logging
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import HttpResponse
+from django.utils import timezone
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -29,7 +31,15 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
     # PERMISSIONS
     # ======================
     def get_permissions(self):
-        if self.action in ["transition", "approve", "reject", "request_info", "reviewer_queue"]:
+        if self.action in [
+            "start_review",
+            "approve",
+            "reject",
+            "request_info",
+            "reviewer_queue",
+            "at_risk",
+            "reviewer_metrics",
+        ]:
             return [permissions.IsAdminUser()]
         return [permissions.IsAuthenticated()]
 
@@ -118,9 +128,10 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
 
     def _transition(self, request, pk, new_status):
         obj = self.get_object()
+        reason = request.data.get("reason") if hasattr(request, "data") else None
         try:
             with transaction.atomic():
-                obj.transition_to(new_status)
+                obj.transition_to(new_status, reason=reason)
             return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -142,6 +153,13 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         if request.user.is_staff:
             raise PermissionDenied("Reviewers cannot use submit endpoint.")
         return self._transition(request, pk, "submitted")
+
+    # ======================
+    # APPROVE
+    # ======================
+    @action(detail=True, methods=["post"])
+    def start_review(self, request, pk=None):
+        return self._transition(request, pk, "under_review")
 
     # ======================
     # APPROVE
@@ -180,3 +198,33 @@ class KYCSubmissionViewSet(viewsets.ModelViewSet):
         qs = self.get_queryset()
         qs = [x for x in qs if x.is_at_risk]
         return Response(self.get_serializer(qs, many=True).data)
+
+    @action(detail=False, methods=["get"])
+    def reviewer_metrics(self, request):
+        now = timezone.now()
+        queue_qs = KYCSubmission.objects.reviewer_queue()
+        queue_count = queue_qs.count()
+
+        avg_time_in_queue_hours = 0.0
+        if queue_count:
+            total_seconds = sum(
+                (now - submission.created_at).total_seconds() for submission in queue_qs
+            )
+            avg_time_in_queue_hours = round(total_seconds / queue_count / 3600, 2)
+
+        since = now - timedelta(days=7)
+        recent = KYCSubmission.objects.filter(created_at__gte=since)
+        recent_total = recent.count()
+        recent_approved = recent.filter(status="approved").count()
+        approval_rate_7d = (
+            round((recent_approved / recent_total) * 100, 2) if recent_total else 0.0
+        )
+
+        return Response(
+            {
+                "queue_count": queue_count,
+                "avg_time_in_queue_hours": avg_time_in_queue_hours,
+                "approval_rate_7d": approval_rate_7d,
+            },
+            status=status.HTTP_200_OK,
+        )

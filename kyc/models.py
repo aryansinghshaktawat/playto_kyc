@@ -159,7 +159,7 @@ class KYCSubmission(models.Model):
     def assign_reviewer(self):
         return
 
-    def transition_to(self, new_status):
+    def transition_to(self, new_status, reason=None):
 
         if not self.can_transition(new_status):
             raise ValueError(f"Invalid transition {self.status} → {new_status}")
@@ -174,11 +174,15 @@ class KYCSubmission(models.Model):
         self.status_changed_at = timezone.now()
         self.save(update_fields=["status", "status_changed_at", "updated_at"])
 
+        payload = {"from": old_status, "to": new_status}
+        if reason:
+            payload["reason"] = reason
+
         Notification.objects.create(
             merchant=self.merchant,
             submission=self,
             event_type="status_changed",
-            payload={"from": old_status, "to": new_status},
+            payload=payload,
         )
 
     @property

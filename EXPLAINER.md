@@ -204,3 +204,134 @@ This system demonstrates:
 * Secure and scalable API architecture
 
 It is structured to be **production-ready and extensible**.
+
+---
+
+# EXPLAINER.md
+
+## 1) The State Machine
+
+**Where it lives:** `kyc/models.py` in `KYCSubmission.transition_to()` and `ALLOWED_TRANSITIONS`.
+
+```python
+ALLOWED_TRANSITIONS = {
+    STATUS_DRAFT: [STATUS_SUBMITTED],
+    STATUS_SUBMITTED: [STATUS_UNDER_REVIEW],
+    STATUS_UNDER_REVIEW: [STATUS_APPROVED, STATUS_REJECTED, STATUS_MORE_INFO_REQUESTED],
+    STATUS_MORE_INFO_REQUESTED: [STATUS_SUBMITTED],
+    STATUS_APPROVED: [],
+    STATUS_REJECTED: [],
+}
+
+def transition_to(self, new_status, reason=None):
+    if not self.can_transition(new_status):
+        raise ValueError(f"Invalid transition {self.status} → {new_status}")
+    ...
+```
+
+**How illegal transitions are prevented:**
+- `can_transition()` checks `ALLOWED_TRANSITIONS`
+- if invalid, `ValueError` is raised
+- API catches this and returns HTTP 400 with a clear error message
+
+---
+
+## 2) The Upload
+
+**Where validation happens:**
+- Model validators in `kyc/models.py`:
+  - `validate_file_size`
+  - `validate_document_type`
+- Serializer checks in `kyc/serializers/__init__.py` for cleaner API errors
+
+```python
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024
+ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"]
+
+def validate_file_size(file):
+    if file.size > MAX_UPLOAD_SIZE:
+        raise ValidationError("File must be ≤ 5MB")
+
+def validate_document_type(file):
+    ext = os.path.splitext(file.name)[1].lower().lstrip(".")
+    if ext not in ALLOWED_DOCUMENT_EXTENSIONS:
+        raise ValidationError("Invalid file type")
+```
+
+**If someone uploads 50MB:**
+- validation fails
+- API returns 400 with a clear message
+- file is not persisted
+
+---
+
+## 3) The Queue
+
+**Query used for reviewer queue:**
+
+```python
+class KYCSubmissionQuerySet(models.QuerySet):
+    def reviewer_queue(self):
+        return self.filter(status__in=REVIEWER_QUEUE_STATUSES).order_by("created_at")
+```
+
+**SLA `at_risk` flag (dynamic):**
+
+```python
+@property
+def is_at_risk(self):
+    if self.status not in AT_RISK_STATUSES:
+        return False
+    return self.created_at < timezone.now() - timedelta(hours=SLA_AT_RISK_HOURS)
+```
+
+**Why this approach:**
+- queue is DB-filtered and oldest-first for fair processing
+- SLA is computed dynamically so it cannot go stale
+
+---
+
+## 4) The Auth
+
+**How merchant A is blocked from seeing merchant B data:** `kyc/views.py` in `get_queryset()`.
+
+```python
+def get_queryset(self):
+    user = self.request.user
+    if user.is_staff:
+        return self.queryset
+    return self.queryset.filter(merchant__email=user.email)
+```
+
+Also:
+- create/update/list require authentication
+- reviewer-only actions (`start_review`, `approve`, `reject`, `request_info`, `reviewer_queue`, `at_risk`, `reviewer_metrics`) require `IsAdminUser`
+
+---
+
+## 5) The AI Audit
+
+**Buggy AI suggestion I rejected:**
+- AI suggested assigning merchant with `Merchant.objects.first()` as a fallback for unauthenticated requests.
+
+**Why it was bad/insecure:**
+- could attach submission to wrong merchant
+- breaks tenant isolation
+- violates business rule that submission owner must match logged-in merchant
+
+**What I replaced it with:**
+
+```python
+def _get_merchant(self):
+    user = self.request.user
+    if not user.email:
+        raise ValidationError("Authenticated user must have an email to submit KYC.")
+
+    merchant, _ = Merchant.objects.get_or_create(
+        email=user.email,
+        defaults={"name": user.username or user.email, "phone": "9999999999"}
+    )
+    return merchant
+```
+
+This ensures merchant ownership is deterministic and tied to authenticated identity.

@@ -119,3 +119,47 @@ class KYCSubmissionAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         created = KYCSubmission.objects.get(pk=response.data["id"])
         self.assertEqual(created.merchant.email, self.merchant_user.email)
+
+    def test_reviewer_can_move_submitted_to_under_review(self):
+        submission = KYCSubmission.objects.create(
+            merchant=self.merchant,
+            business_name="Submitted Biz",
+            business_type="SaaS",
+            monthly_volume="4200.00",
+            status=STATUS_SUBMITTED,
+        )
+
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.post(
+            reverse("kyc-start-review", kwargs={"pk": submission.pk}),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, STATUS_UNDER_REVIEW)
+
+    def test_reviewer_metrics_endpoint(self):
+        KYCSubmission.objects.create(
+            merchant=self.merchant,
+            business_name="Queue One",
+            business_type="Agency",
+            monthly_volume="1000.00",
+            status=STATUS_SUBMITTED,
+        )
+        KYCSubmission.objects.create(
+            merchant=self.merchant,
+            business_name="Queue Two",
+            business_type="Services",
+            monthly_volume="2000.00",
+            status=STATUS_UNDER_REVIEW,
+        )
+
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.get(reverse("kyc-reviewer-metrics"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("queue_count", response.data)
+        self.assertIn("avg_time_in_queue_hours", response.data)
+        self.assertIn("approval_rate_7d", response.data)

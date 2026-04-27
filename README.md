@@ -15,11 +15,22 @@ Playto Pay requires a robust onboarding pipeline where:
 * System enforces workflow rules
 * Edge cases (invalid transitions, file validation, delays) are handled
 
+<<<<<<< HEAD
 This project implements that system end-to-end.
 
 ---
 
 ##  Tech Stack
+=======
+- Merchant and KYC submission models
+- State machine enforced inside the model
+- File upload for PAN, Aadhaar, and bank statement
+- File validation for type and size
+## Tech Stack
+
+- Django REST Framework
+- SQLite for local development
+>>>>>>> 8c41aed (refactor: enhance KYC workflow documentation, improve state transition handling, and add reviewer metrics endpoint; update seed data command)
 
 * **Backend**: Django, Django REST Framework
 * **Database**: SQLite (can switch to PostgreSQL)
@@ -167,8 +178,12 @@ pip install -r requirements.txt
 
 ### 4. Migrate DB
 
+<<<<<<< HEAD
 ```bash id="4iqlh3"
 python manage.py makemigrations
+=======
+5. Run migrations
+>>>>>>> 8c41aed (refactor: enhance KYC workflow documentation, improve state transition handling, and add reviewer metrics endpoint; update seed data command)
 python manage.py migrate
 ```
 
@@ -176,6 +191,7 @@ python manage.py migrate
 
 ### 5. Create Superuser
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 ```bash id="4rt3bf"
 =======
@@ -185,6 +201,8 @@ The API will be available at:
 
 ## Authentication and Access Control
 
+=======
+>>>>>>> 8c41aed (refactor: enhance KYC workflow documentation, improve state transition handling, and add reviewer metrics endpoint; update seed data command)
 This project uses Django's built-in `User` model.
 
 - `is_staff = True` means reviewer
